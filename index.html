@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Parametri Vitali</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.29/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+<style>
+body {
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #f2f4f7;
+  margin: 0;
+  padding: 10px;
+}
+
+.box {
+  background: white;
+  padding: 15px;
+  border-radius: 14px;
+  margin-bottom: 15px;
+}
+
+h1 { text-align: center; }
+
+input, button {
+  width: 100%;
+  padding: 12px;
+  font-size: 16px;
+  margin-top: 8px;
+}
+
+button {
+  background: #007aff;
+  color: white;
+  border: none;
+  border-radius: 10px;
+}
+
+button.secondary { background: #666; }
+button.danger { background: #d9534f; }
+
+.tabs {
+  display: flex;
+  overflow-x: auto;
+  margin-bottom: 10px;
+}
+
+.tab {
+  padding: 10px 16px;
+  margin-right: 6px;
+  background: #ddd;
+  border-radius: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tab.active {
+  background: #007aff;
+  color: white;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+th, td {
+  border: 1px solid #ddd;
+  padding: 6px;
+  text-align: center;
+}
+
+th { background: #f0f0f0; }
+
+.highlight {
+  background: #fff3cd !important;
+}
+
+.hidden { display: none; }
+</style>
+</head>
+
+<body>
+
+<!-- LOGIN -->
+<div id="login" class="box">
+  <h2>🔐 PIN</h2>
+  <input type="password" id="pinInput">
+  <button onclick="checkPin()">Accedi</button>
+</div>
+
+<div id="app" class="hidden">
+
+<h1>Parametri Vitali</h1>
+
+<form id="dataForm" class="box">
+  <input type="date" id="date" required>
+  <input type="time" id="time" required>
+  <input type="text" id="slot" readonly>
+
+  <input type="number" id="min" placeholder="Min" required>
+  <input type="number" id="max" placeholder="Max" required>
+  <input type="number" id="pulse" placeholder="Pulsazioni" required>
+  <input type="number" id="sat" placeholder="Saturazione %" required>
+  <input type="number" step="0.1" id="temp" placeholder="Temperatura °C" required>
+
+  <button type="submit">💾 Salva</button>
+</form>
+
+<div class="tabs" id="monthTabs"></div>
+<div id="monthContent"></div>
+
+</div>
+
+<script>
+/* ===== PIN ===== */
+const PIN = "1234";
+function checkPin() {
+  if (pinInput.value === PIN) {
+    login.classList.add("hidden");
+    app.classList.remove("hidden");
+  } else alert("PIN errato");
+}
+
+/* ===== STATO ===== */
+let records = JSON.parse(localStorage.getItem("vitali")) || [];
+let editingIndex = null;
+let highlightIndex = null;
+let activeMonth = null;
+
+/* ===== UTIL ===== */
+function save() {
+  localStorage.setItem("vitali", JSON.stringify(records));
+}
+
+function fasciaOraria(o) {
+  return (o >= "00:01" && o <= "12:00") ? "Mattina" : "Pomeriggio";
+}
+
+function setNow() {
+  const n = new Date();
+  date.value = n.toISOString().substring(0,10);
+  time.value = n.toTimeString().substring(0,5);
+  slot.value = fasciaOraria(time.value);
+}
+
+time.onchange = () => slot.value = fasciaOraria(time.value);
+
+/* ===== FORM ===== */
+dataForm.onsubmit = e => {
+  e.preventDefault();
+
+  if (editingIndex !== null) {
+    if (!confirm("Vuoi salvare le modifiche a questo record?")) return;
+  }
+
+  const d = {
+    date: date.value,
+    time: time.value,
+    slot: fasciaOraria(time.value),
+    min: min.value,
+    max: max.value,
+    pulse: pulse.value,
+    sat: sat.value,
+    temp: temp.value
+  };
+
+  if (editingIndex !== null) {
+    records[editingIndex] = d;
+    highlightIndex = editingIndex;
+    editingIndex = null;
+  } else {
+    records.push(d);
+    highlightIndex = records.length - 1;
+  }
+
+  save();
+  setNow();
+  render();
+  e.target.reset();
+};
+
+/* ===== RENDER ===== */
+function render() {
+  const grouped = {};
+  records.forEach((r,i)=>{
+    const m = r.date.substring(0,7);
+    if(!grouped[m]) grouped[m] = [];
+    grouped[m].push({...r,index:i});
+  });
+
+  const months = Object.keys(grouped).sort();
+  if (!activeMonth) activeMonth = months[months.length - 1];
+
+  monthTabs.innerHTML = months.map(m =>
+    `<div class="tab ${m===activeMonth?'active':''}" onclick="selectMonth('${m}')">${m}</div>`
+  ).join("");
+
+  renderMonth(grouped[activeMonth] || []);
+}
+
+function renderMonth(data) {
+  monthContent.innerHTML = `
+    <div class="box">
+      <button onclick="exportPDF('${activeMonth}')">📄 PDF</button>
+      <button class="secondary" onclick="exportExcel('${activeMonth}')">📊 Excel</button>
+    </div>
+    <div class="box">
+      <table>
+        <tr>
+          <th>Data</th><th>Ora</th><th>Min</th><th>Max</th><th>Puls</th><th></th>
+        </tr>
+        ${data.map(r=>`
+        <tr class="${r.index===highlightIndex?'highlight':''}">
+          <td>${r.date}</td>
+          <td>${r.time}</td>
+          <td>${r.min}</td>
+          <td>${r.max}</td>
+          <td>${r.pulse}</td>
+          <td>
+            <button onclick="edit(${r.index})">✏️</button>
+            <button class="danger" onclick="del(${r.index})">🗑️</button>
+          </td>
+        </tr>`).join("")}
+      </table>
+    </div>
+  `;
+}
+
+/* ===== AZIONI ===== */
+function selectMonth(m) {
+  activeMonth = m;
+  highlightIndex = null;
+  render();
+}
+
+function edit(i) {
+  const r = records[i];
+  date.value = r.date;
+  time.value = r.time;
+  slot.value = r.slot;
+  min.value = r.min;
+  max.value = r.max;
+  pulse.value = r.pulse;
+  sat.value = r.sat;
+  temp.value = r.temp;
+  editingIndex = i;
+}
+
+function del(i) {
+  if (confirm("Cancellare il record?")) {
+    records.splice(i,1);
+    save();
+    render();
+  }
+}
+
+/* ===== EXPORT ===== */
+function exportPDF(month){
+  const {jsPDF}=window.jspdf;
+  const pdf=new jsPDF();
+  const rows=records.filter(r=>r.date.startsWith(month))
+    .map(r=>[r.date,r.time,r.min,r.max,r.pulse,r.sat,r.temp]);
+  pdf.text(`Parametri ${month}`,14,10);
+  pdf.autoTable({
+    head:[["Data","Ora","Min","Max","Puls","Sat","Temp"]],
+    body:rows,
+    startY:15
+  });
+  pdf.save(`parametri_${month}.pdf`);
+}
+
+function exportExcel(month){
+  const rows=records.filter(r=>r.date.startsWith(month));
+  const ws=XLSX.utils.json_to_sheet(rows);
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,month);
+  XLSX.writeFile(wb,`parametri_${month}.xlsx`);
+}
+
+setNow();
+render();
+</script>
+
+</body>
+</html>
