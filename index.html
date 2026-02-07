@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Parametri Vitali</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 10px; background:#f2f4f7; }
+h1 { text-align:center; }
+.box { background:white; padding:15px; border-radius:14px; margin-bottom:15px; }
+input, button { width:100%; padding:10px; margin-top:5px; font-size:16px; }
+button { border:none; border-radius:10px; color:white; background:#007aff; }
+button.secondary { background:#666; }
+button.danger { background:#d9534f; }
+.tabs { display:flex; overflow-x:auto; margin-bottom:10px; }
+.tab { padding:10px 16px; margin-right:6px; background:#ddd; border-radius:10px; white-space:nowrap; cursor:pointer; }
+.tab.active { background:#007aff; color:white; }
+table { width:100%; border-collapse:collapse; font-size:14px; }
+th, td { border:1px solid #ddd; padding:6px; text-align:center; }
+th { background:#f0f0f0; }
+.highlight { background:#fff3cd !important; }
+.actions { display:flex; gap:6px; justify-content:center; }
+.table-wrapper { overflow-x:auto; -webkit-overflow-scrolling: touch; }
+.hidden { display:none; }
+</style>
+</head>
+<body>
+
+<h1>Parametri Vitali</h1>
+
+<div class="box">
+  <form id="dataForm">
+    <input type="date" id="date" required>
+    <input type="time" id="time" required>
+    <input type="text" id="slot" readonly>
+
+    <input type="number" id="min" placeholder="Min" required>
+    <input type="number" id="max" placeholder="Max" required>
+    <input type="number" id="pulse" placeholder="Pulsazioni" required>
+    <input type="number" id="sat" placeholder="Saturazione %" required>
+    <input type="number" step="0.1" id="temp" placeholder="Temperatura °C" required>
+
+    <button type="submit">💾 Salva</button>
+  </form>
+</div>
+
+<div class="tabs" id="monthTabs"></div>
+<div id="monthContent"></div>
+
+<script>
+const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbw3M6a8wj92ItEk6RzWq9EnNq4xm8IedplosK05suKyVTScxXvrzufupIwdu0YokeW7/exec"; // <-- Inserisci qui la tua URL Google Web App
+
+let records = [];
+let editingIndex = null;
+let highlightIndex = null;
+let activeMonth = null;
+
+// Preimposta data e ora
+function setNow() {
+  const n = new Date();
+  date.value = n.toISOString().substring(0,10);
+  time.value = n.toTimeString().substring(0,5);
+  slot.value = fasciaOraria(time.value);
+}
+function fasciaOraria(o){ return (o >= "00:01" && o <= "12:00") ? "Mattina":"Pomeriggio"; }
+time.onchange = () => slot.value = fasciaOraria(time.value);
+
+// Carica dati da Google Sheets
+async function loadData(){
+  const res = await fetch(WEB_APP_URL, {
+    method:"POST",
+    body: JSON.stringify({action:"get"})
+  });
+  records = await res.json();
+  render();
+}
+
+// Salva record (add o update)
+async function saveRecord(record){
+  if(editingIndex !== null){
+    record._id = records[editingIndex]._id; // tieni l'id se vuoi modificare
+    editingIndex = null;
+  }
+  await fetch(WEB_APP_URL, {
+    method:"POST",
+    body: JSON.stringify({action:"add", record})
+  });
+  await loadData();
+}
+
+dataForm.onsubmit = async e=>{
+  e.preventDefault();
+  const record = {
+    Data: date.value,
+    Ora: time.value,
+    Fascia: slot.value,
+    Min: min.value,
+    Max: max.value,
+    Pulsazioni: pulse.value,
+    Saturazione: sat.value,
+    Temperatura: temp.value
+  };
+  if(editingIndex !== null && !confirm("Vuoi salvare le modifiche?")) return;
+  await saveRecord(record);
+  dataForm.reset();
+  setNow();
+}
+
+// Render tab mensili e tabella
+function render(){
+  const grouped = {};
+  records.forEach((r,i)=>{
+    const m = r.Data.substring(0,7);
+    if(!grouped[m]) grouped[m] = [];
+    grouped[m].push({...r, index:i});
+  });
+  const months = Object.keys(grouped).sort();
+  if(!activeMonth && months.length) activeMonth = months[months.length-1];
+
+  monthTabs.innerHTML = months.map(m=>`<div class="tab ${m===activeMonth?'active':''}" onclick="selectMonth('${m}')">${m}</div>`).join("");
+  renderMonth(grouped[activeMonth] || []);
+}
+
+function selectMonth(m){ activeMonth=m; highlightIndex=null; render(); }
+
+function renderMonth(data){
+  monthContent.innerHTML = `
+  <div class="box">
+    <div class="table-wrapper">
+    <table>
+      <tr>
+        <th>Data</th><th>Ora</th><th>Min</th><th>Max</th><th>Azioni</th>
+      </tr>
+      ${data.map(r=>`
+        <tr class="${r.index===highlightIndex?'highlight':''}">
+          <td>${r.Data}</td>
+          <td>${r.Ora}</td>
+          <td>${r.Min}</td>
+          <td>${r.Max}</td>
+          <td class="actions">
+            <button onclick="showDetails(${r.index})">ℹ️</button>
+            <button onclick="editRecord(${r.index})">✏️</button>
+            <button class="danger" onclick="deleteRecord(${r.index})">🗑️</button>
+          </td>
+        </tr>`).join("")}
+    </table>
+    </div>
+  </div>`;
+}
+
+function showDetails(i){
+  const r = records[i];
+  alert(`📅 Data: ${r.Data}\n⏰ Ora: ${r.Ora}\n🕒 Fascia: ${r.Fascia}\nMin: ${r.Min}\nMax: ${r.Max}\nPulsazioni: ${r.Pulsazioni}\nSaturazione: ${r.Saturazione}%\nTemperatura: ${r.Temperatura}°`);
+}
+
+function editRecord(i){
+  const r=records[i];
+  date.value=r.Data;
+  time.value=r.Ora;
+  slot.value=r.Fascia;
+  min.value=r.Min;
+  max.value=r.Max;
+  pulse.value=r.Pulsazioni;
+  sat.value=r.Saturazione;
+  temp.value=r.Temperatura;
+  editingIndex=i;
+}
+
+async function deleteRecord(i){
+  if(confirm("Cancellare il record?")){
+    const r = records[i];
+    await fetch(WEB_APP_URL, {
+      method:"POST",
+      body: JSON.stringify({action:"delete", record:r})
+    });
+    await loadData();
+  }
+}
+
+// Inizializzazione
+setNow();
+loadData();
+
+</script>
+</body>
+</html>
